@@ -1,0 +1,30 @@
+I need to analyze and summarize a conversation. The transcript of the
+conversation is between the <data> XML-like tags.
+
+<data>
+{{transcript}}
+</data>
+
+Please do the following:
+
+1. Identify the main topic being discussed in the conversation.
+2. Provide a concise summary of the meeting, highlighting the key points.
+3. Include a one-word sentiment analysis.
+4. List any issues, problems, or causes of friction that arose during the conversation.
+
+Format the output in JSON as shown in the example below. Write only the JSON output and nothing more.
+
+Example output:
+{
+    "topic": "<main_topic>",
+    "meeting_summary": "<concise_summary_highlighting_main_points>",
+    "sentiment": "<one_word_sentiment>",
+    "issues": [
+        {
+            "topic": "<short_issue_topic>",
+            "summary": "<description_of_the_issue>"
+        }
+    ]
+}
+
+Here is the JSON output:
