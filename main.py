@@ -2,43 +2,62 @@ import json
 import time
 import uuid
 from fastapi import FastAPI, HTTPException, File, UploadFile
-from pydantic import BaseModel
+from fastapi.templating import Jinja2Templates
 import boto3
 from decouple import config
 
-# AWS configuration
+
 AWS_REGION = config("AWS_REGION")
 AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY")
 BUCKET_NAME = config("AWS_BUCKET_NAME")
+OUTPUT_BUCKET_NAME = config("OUTPUT_BUCKET_NAME")
 
-# Initialize Boto3 Bedrock client
-bedrock_runtime = boto3.client(
-    "bedrock-runtime",
-    region_name=AWS_REGION,
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-)
 
-# Initialize FastAPI app
 app = FastAPI()
 
-
-# Request model
-class PromptRequest(BaseModel):
-    model_id: str = "amazon.titan-text-lite-v1"
-    prompt: str
+templates = Jinja2Templates(directory="templates")
 
 
-# API endpoint
-@app.post("/generate")
-async def generate_response(request: PromptRequest):
+async def upload_file_to_s3(file_obj, file_name, s3_client, bucket_name):
+
+    try:
+        s3_client.upload_fileobj(file_obj, bucket_name, file_name)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File uplaod failed: {e}",
+        )
+
+
+async def summarize_transcription(model_id: str, transcript: str):
+
+    bedrock_runtime = boto3.client(
+        "bedrock-runtime",
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    )
+
+    template = templates.get_template("prompt_template.txt")
+
+    rendered_prompt = template.render(transcript=transcript)
+
     try:
         kwargs = {
-            "modelId": request.model_id,
+            "modelId": model_id,
             "contentType": "application/json",
             "accept": "*/*",
-            "body": json.dumps({"inputText": request.prompt}),
+            "body": json.dumps(
+                {
+                    "inputText": rendered_prompt,
+                    "textGenerationConfig": {
+                        "maxTokenCount": 512,
+                        "temperature": 0,
+                        "topP": 0.9,
+                    },
+                }
+            ),
         }
         # Call AWS Bedrock
         response = bedrock_runtime.invoke_model(**kwargs)
@@ -53,57 +72,64 @@ async def generate_response(request: PromptRequest):
         )
 
 
-async def upload_file_to_s3(file_obj, file_name, s3_client):
-
-    try:
-        s3_client.Bucket(BUCKET_NAME).put_object(Key=file_name, Body=file_obj)
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File uplaod failed: {e}",
-        )
-
-
-async def transcribe_audio(bucket_name, file_name, file_content):
+async def transcribe_audio(
+    model_id,
+    bucket_name,
+    file_name,
+    file_content,
+    output_bucket,
+):
 
     # Upload Audio to s3 bucket
-    s3_client = boto3.resource("s3")
+    s3_client = boto3.client(
+        "s3",
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    )
     await upload_file_to_s3(
-        file_obj=file_content, file_name=file_name, s3_client=s3_client
+        file_obj=file_content,
+        file_name=file_name,
+        s3_client=s3_client,
+        bucket_name=bucket_name,
     )
 
-    transcribe_client = boto3.client("transcribe", region_name="us")
+    transcribe_client = boto3.client(
+        "transcribe",
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    )
 
     job_name = f"transcription-job-{uuid.uuid4()}"
 
-    response = transcribe_client.start_transcription_job(
+    transcribe_client.start_transcription_job(
         TranscriptionJobName=job_name,
         Media={"MediaFileUri": f"s3://{bucket_name}/{file_name}"},
         MediaFormat="mp3",
         LanguageCode="en-US",
-        OutputBucketName=bucket_name,
+        OutputBucketName=output_bucket,
         Settings={"ShowSpeakerLabels": True, "MaxSpeakerLabels": 2},
     )
 
     while True:
-        status = transcribe_client.get_transcription_job(
+        job_status = transcribe_client.get_transcription_job(
             TranscriptionJobName=job_name,
         )
-        if status["TranscriptionJob"]["TranscriptionJobStatus"] in [
-            "COMPLETED",
-            "FAILED",
-        ]:
+
+        status = job_status["TranscriptionJob"]["TranscriptionJobStatus"]
+        if status in ["COMPLETED", "FAILED"]:
             break
         time.sleep(2)
 
-    print(status["TranscriptionJob"]["TranscriptionJobStatus"])
+    if status == "FAILED":
+        raise HTTPException(status_code=400, detail="Transcription Job failed")
 
     if status["TranscriptionJob"]["TranscriptionJobStatus"] == "COMPLETED":
 
-        # Load the transcript from S3.
         transcript_key = f"{job_name}.json"
         transcript_obj = s3_client.get_object(
-            Bucket=bucket_name,
+            Bucket=output_bucket,
             Key=transcript_key,
         )
         transcript_text = transcript_obj["Body"].read().decode("utf-8")
@@ -119,32 +145,38 @@ async def transcribe_audio(bucket_name, file_name, file_content):
             speaker_label = item.get("speaker_label", None)
             content = item["alternatives"][0]["content"]
 
-            # Start the line with the speaker label:
             if speaker_label is not None and speaker_label != current_speaker:
                 current_speaker = speaker_label
                 output_text += f"\n{current_speaker}: "
 
-            # Add the speech content:
             if item["type"] == "punctuation":
                 output_text = output_text.rstrip()
 
             output_text += f"{content} "
 
-        # Save the transcript to a text file
-        with open(f"{job_name}.txt", "w") as f:
-            f.write(output_text)
+        result = await summarize_transcription(
+            model_id,
+            transcript=output_text,
+        )
 
-    return output_text
+        return result
 
 
 @app.post("/summary")
-async def audio_summary(file: UploadFile = File(...)):
-    file_content = await file.read()
+async def audio_summary(
+    model_id: str = "amazon.titan-text-lite-v1",
+    file: UploadFile = File(...),
+):
+    """An endpoint for generating meeting summary from audio file"""
+    # But first, ensure the cursor is at position 0:
+    file.file.seek(0)
 
     response = await transcribe_audio(
+        model_id=model_id,
         bucket_name=BUCKET_NAME,
-        filename=file.filename,
-        file_content=file_content,
+        file_name=file.filename,
+        file_content=file.file,
+        output_bucket=OUTPUT_BUCKET_NAME,
     )
 
     return {"response": response}
