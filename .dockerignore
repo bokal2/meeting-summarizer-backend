@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+poetry.lock.backup
+*.log
+notes.txt
