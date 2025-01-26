@@ -72,6 +72,29 @@ async def summarize_transcription(model_id: str, transcript: str):
         )
 
 
+def process_transcription(transcript_json):
+    output_text = ""
+    current_speaker = None
+
+    items = transcript_json["results"]["items"]
+
+    for item in items:
+
+        speaker_label = item.get("speaker_label", None)
+        content = item["alternatives"][0]["content"]
+
+        if speaker_label is not None and speaker_label != current_speaker:
+            current_speaker = speaker_label
+            output_text += f"\n{current_speaker}: "
+
+        if item["type"] == "punctuation":
+            output_text = output_text.rstrip()
+
+        output_text += f"{content} "
+
+    return output_text
+
+
 async def transcribe_audio(
     model_id,
     bucket_name,
@@ -133,24 +156,7 @@ async def transcribe_audio(
     transcript_text = transcript_obj["Body"].read().decode("utf-8")
     transcript_json = json.loads(transcript_text)
 
-    output_text = ""
-    current_speaker = None
-
-    items = transcript_json["results"]["items"]
-
-    for item in items:
-
-        speaker_label = item.get("speaker_label", None)
-        content = item["alternatives"][0]["content"]
-
-        if speaker_label is not None and speaker_label != current_speaker:
-            current_speaker = speaker_label
-            output_text += f"\n{current_speaker}: "
-
-        if item["type"] == "punctuation":
-            output_text = output_text.rstrip()
-
-        output_text += f"{content} "
+    output_text = process_transcription(transcript_json)
 
     result = await summarize_transcription(
         model_id,
