@@ -125,41 +125,39 @@ async def transcribe_audio(
     if status == "FAILED":
         raise HTTPException(status_code=400, detail="Transcription Job failed")
 
-    if status["TranscriptionJob"]["TranscriptionJobStatus"] == "COMPLETED":
+    transcript_key = f"{job_name}.json"
+    transcript_obj = s3_client.get_object(
+        Bucket=output_bucket,
+        Key=transcript_key,
+    )
+    transcript_text = transcript_obj["Body"].read().decode("utf-8")
+    transcript_json = json.loads(transcript_text)
 
-        transcript_key = f"{job_name}.json"
-        transcript_obj = s3_client.get_object(
-            Bucket=output_bucket,
-            Key=transcript_key,
-        )
-        transcript_text = transcript_obj["Body"].read().decode("utf-8")
-        transcript_json = json.loads(transcript_text)
+    output_text = ""
+    current_speaker = None
 
-        output_text = ""
-        current_speaker = None
+    items = transcript_json["results"]["items"]
 
-        items = transcript_json["results"]["items"]
+    for item in items:
 
-        for item in items:
+        speaker_label = item.get("speaker_label", None)
+        content = item["alternatives"][0]["content"]
 
-            speaker_label = item.get("speaker_label", None)
-            content = item["alternatives"][0]["content"]
+        if speaker_label is not None and speaker_label != current_speaker:
+            current_speaker = speaker_label
+            output_text += f"\n{current_speaker}: "
 
-            if speaker_label is not None and speaker_label != current_speaker:
-                current_speaker = speaker_label
-                output_text += f"\n{current_speaker}: "
+        if item["type"] == "punctuation":
+            output_text = output_text.rstrip()
 
-            if item["type"] == "punctuation":
-                output_text = output_text.rstrip()
+        output_text += f"{content} "
 
-            output_text += f"{content} "
+    result = await summarize_transcription(
+        model_id,
+        transcript=output_text,
+    )
 
-        result = await summarize_transcription(
-            model_id,
-            transcript=output_text,
-        )
-
-        return result
+    return result
 
 
 @app.post("/summary")
