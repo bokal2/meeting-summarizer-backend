@@ -1,4 +1,4 @@
-name: Build and Push Meetings Summarizer UI Docker Image to Docker Hub
+name: Build and Push Meetings Summarizer Backend Docker Image to Docker Hub
 
 on:
   push:
@@ -23,25 +23,34 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    # Step 3: Docker Buildx (for multi-platform builds)
+    # Step 3: Set up Docker Buildx (for multi-platform builds)
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
 
-    # Step 4: Extract the tag or branch name for image tagging
+    # Step 4: Determine the image tag
     - name: Set image tag
       id: tag
       run: |
-        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-          echo "IMAGE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-        else
+        if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "IMAGE_TAG=${TAG_NAME}" >> $GITHUB_ENV
+        elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+          SHORT_SHA=$(git rev-parse --short HEAD)
           echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          echo "IMAGE_TAG_SHA=$SHORT_SHA" >> $GITHUB_ENV
+        else
+          echo "Skipping Docker push for feature branch"
+          exit 0
         fi
 
-    # Step 5: Build and push the Docker image
+    # Step 5: Build and push the Docker image (Multi-Arch)
     - name: Build and push Docker image
       uses: docker/build-push-action@v4
       with:
         context: .
         file: ./Dockerfile
         push: true
-        tags: bokal98/llm-backend:${{ env.IMAGE_TAG }}
+        platforms: linux/amd64,linux/arm64,linux/arm/v7
+        tags: |
+          bokal98/llm-backend:${{ env.IMAGE_TAG }}
+          ${{ env.IMAGE_TAG_SHA && format('bokal98/llm-backend:{0}', env.IMAGE_TAG_SHA) || '' }}
