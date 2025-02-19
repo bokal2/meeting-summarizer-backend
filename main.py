@@ -3,6 +3,7 @@ import time
 import uuid
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 import boto3
 from decouple import config
 
@@ -15,6 +16,21 @@ OUTPUT_BUCKET_NAME = config("OUTPUT_BUCKET_NAME")
 
 
 app = FastAPI()
+
+# Configure allowed origins
+origins = [
+    "http://localhost:3000",  # Frontend (React/Angular/Vue)
+    "http://127.0.0.1:3000",  # Alternative localhost
+    "http://localhost:8000",  # Backend
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Domains that can make requests
+    allow_credentials=True,
+    allow_methods=["*"],  # HTTP methods allowed
+    allow_headers=["*"],  # Headers allowed
+)
 
 templates = Jinja2Templates(directory="templates")
 
@@ -166,8 +182,8 @@ async def transcribe_audio(
     return result
 
 
-@app.post("/summary")
-async def audio_summary(
+@app.post("/summary-test")
+async def audio_summary_test(
     model_id: str = "amazon.titan-text-lite-v1",
     file: UploadFile = File(...),
 ):
@@ -184,3 +200,31 @@ async def audio_summary(
     )
 
     return {"response": response}
+
+
+@app.post("/summary")
+async def audio_summary(
+    model_id: str = "amazon.titan-text-lite-v1",
+    file: UploadFile = File(...),
+):
+    """An endpoint for generating meeting summary from audio file"""
+    # But first, ensure the cursor is at position 0:
+    file.file.seek(0)
+
+    time.sleep(10)
+
+    response = {
+        "response": {
+            "topic": "Project Updates",
+            "meeting_summary": "The meeting discussed progress on the Q1 deliverables...",
+            "sentiment": "positive",
+            "issues": [
+                {
+                    "topic": "Timeline Delay",
+                    "summary": "The team noted delays in the design phase.",
+                }
+            ],
+        }
+    }
+
+    return response
