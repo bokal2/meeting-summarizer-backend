@@ -183,7 +183,7 @@ async def transcribe_audio(
 
 
 @app.post("/summary")
-async def audio_summary_test(
+async def audio_summary(
     model_id: str = "amazon.titan-text-lite-v1",
     file: UploadFile = File(...),
 ):
